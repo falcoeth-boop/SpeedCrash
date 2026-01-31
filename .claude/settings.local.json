@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git remote set-url:*)",
+      "Bash(git cat-file:*)",
+      "Bash(git rev-list:*)",
+      "Bash(test:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}
