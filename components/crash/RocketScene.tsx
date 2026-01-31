@@ -135,7 +135,7 @@ export function RocketScene({
   }, [state]);
 
   useEffect(() => {
-    const active = state === 'FLYING' || state === 'WIN';
+    const active = state === 'LAUNCHING' || state === 'FLYING' || state === 'WIN';
     if (!active) return;
 
     const pos = getRocketPosition(currentMultiplier, elapsedTime, yMax);
@@ -174,7 +174,7 @@ export function RocketScene({
 
       {/* ✅ Layer: Route/Graph behind rocket (z-19) */}
       <div className="absolute inset-0 pointer-events-none z-[19]">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
+        <svg viewBox="-8 0 108 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
           {/* Glow underlay */}
           <polyline
             fill="none"
