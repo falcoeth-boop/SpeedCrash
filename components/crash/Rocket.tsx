@@ -4,10 +4,6 @@ import { useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CrashState } from '@/types';
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
-
 interface SpriteConfig {
   src: string;
   width: number;
@@ -27,35 +23,51 @@ interface Props {
   elapsedTime: number;
   sprite?: SpriteConfig;
 
-  /** ✅ makes Rocket match bustabit viewport */
   yMax?: number;
 
-  /** Optional: lets RocketScene sample the path for star-trail rendering */
+  /** ✅ NEW: RocketScene can override exact screen position (Bustabit camera) */
+  positionOverride?: { xPercent: number; yPercent: number };
+
+  /** optional: used only for small visual tweaks */
+  pinned?: boolean;
+
   onPosition?: (pos: RocketPos) => void;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Tuning                                                             */
-/* ------------------------------------------------------------------ */
-
-const TIME_TO_CROSS_SCENE = 10;
 const X_START = -8;
-
-/** ✅ FIX #1: reduce end so rocket doesn't clip right border */
-const X_END = 86;
-
 const ROTATION_DMULT = 0.05;
-const Y_TOP = 85;
 
-/**
- * ✅ FIX #3: easy tweak without breaking math.
- * If your rocket sprite points more “right” than “up-right”, adjust this.
- */
+/** tweak if needed */
 const ROCKET_ANGLE_OFFSET = 45;
 
-/* ------------------------------------------------------------------ */
-/*  Exhaust trail colors                                               */
-/* ------------------------------------------------------------------ */
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+/** local Y mapping only used for rotation when override exists */
+function baseYPercent(multiplier: number, yMax?: number): number {
+  const max = Math.max(2, yMax ?? 2);
+  const m = clamp(multiplier, 1, max);
+  const yNorm = Math.log(m) / Math.log(max);
+  return yNorm * 85;
+}
+
+/** simple dx in percent space for rotation */
+function getRotation(multiplier: number, elapsedTime: number, yMax?: number): number {
+  const m0 = Math.max(multiplier, 1);
+  const m1 = m0 + ROTATION_DMULT;
+
+  const y0 = baseYPercent(m0, yMax);
+  const y1 = baseYPercent(m1, yMax);
+
+  // pseudo dx
+  const dx = 1.2;
+  const dy = y1 - y0;
+
+  const radians = Math.atan2(dy, dx);
+  const degrees = radians * (180 / Math.PI);
+  return ROCKET_ANGLE_OFFSET - degrees;
+}
 
 const TRAIL_COLORS = [
   'rgba(255, 220, 80, 1)',
@@ -71,58 +83,7 @@ const TRAIL_COLORS = [
   'rgba(140, 0, 0, 0.15)',
   'rgba(120, 0, 0, 0.1)',
 ];
-
 const TRAIL_COUNT = 12;
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
-}
-
-/** X maps elapsed time to horizontal progress FROM X_START → X_END */
-function getX(elapsedTime: number): number {
-  if (elapsedTime <= 0) return X_START;
-  const progress = elapsedTime / TIME_TO_CROSS_SCENE; // 0..1
-  const x = X_START + progress * (X_END - X_START);
-  return Math.min(X_END, x);
-}
-
-/**
- * ✅ Bustabit viewport Y mapping: 1..yMax => 0..Y_TOP
- * ✅ FIX #2: default yMax to 2 (NOT 250) to avoid mismatch/glitches.
- */
-function getY(multiplier: number, yMax?: number): number {
-  const max = Math.max(2, yMax ?? 2);
-  const m = clamp(multiplier, 1, max);
-  const yNorm = Math.log(m) / Math.log(max);
-  return yNorm * Y_TOP;
-}
-
-function getRotation(multiplier: number, elapsedTime: number, yMax?: number): number {
-  const m0 = Math.max(multiplier, 1);
-  const m1 = m0 + ROTATION_DMULT;
-
-  const y0 = getY(m0, yMax);
-  const y1 = getY(m1, yMax);
-
-  const x0 = getX(elapsedTime);
-  const x1 = getX(elapsedTime + 0.05);
-
-  const dy = y1 - y0;
-  const dx = Math.max(0.0001, x1 - x0);
-
-  const radians = Math.atan2(dy, dx);
-  const degrees = radians * (180 / Math.PI);
-
-  return ROCKET_ANGLE_OFFSET - degrees;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
 
 export function Rocket({
   currentMultiplier,
@@ -132,6 +93,8 @@ export function Rocket({
   sprite,
   onPosition,
   yMax,
+  positionOverride,
+  pinned,
 }: Props) {
   const isIdle = state === 'IDLE' || state === 'BETTING';
   const isLaunching = state === 'LAUNCHING';
@@ -139,13 +102,14 @@ export function Rocket({
   const isWin = state === 'WIN';
   const isCrashed = state === 'CRASHED';
 
-  /** keep your behavior: only move once flying/win */
   const active = isFlying || isWin;
 
   const { xPercent, yPercent, rotation, showExhaust, showRocket, nearTarget } =
     useMemo(() => {
-      const x = active ? getX(elapsedTime) : X_START;
-      const y = active ? getY(currentMultiplier, yMax) : 0;
+      const x = positionOverride?.xPercent ?? (active ? 0 : X_START);
+      const y = positionOverride?.yPercent ?? (active ? 0 : 0);
+
+      // rotation stays based on curve direction (safe even when pinned)
       const rot = active ? getRotation(currentMultiplier, elapsedTime, yMax) : 0;
 
       const exhaust = isLaunching || isFlying || isWin;
@@ -163,9 +127,10 @@ export function Rocket({
         nearTarget: near,
       };
     }, [
+      positionOverride,
       active,
-      elapsedTime,
       currentMultiplier,
+      elapsedTime,
       yMax,
       isLaunching,
       isFlying,
@@ -208,12 +173,12 @@ export function Rocket({
         >
           <motion.div
             animate={
-              isLaunching
+              isLaunching && !pinned
                 ? { x: [0, -2, 2, -3, 3, -1, 1, 0], y: [0, 1, -1, 2, -2, 1, 0] }
                 : { x: 0, y: 0 }
             }
             transition={
-              isLaunching
+              isLaunching && !pinned
                 ? { duration: 0.3, repeat: Infinity, repeatType: 'loop' as const }
                 : { duration: 0.1 }
             }
@@ -222,7 +187,8 @@ export function Rocket({
               <motion.div
                 className="absolute -inset-4 rounded-full"
                 style={{
-                  background: 'radial-gradient(circle, rgba(34,197,94,0.5) 0%, transparent 70%)',
+                  background:
+                    'radial-gradient(circle, rgba(34,197,94,0.5) 0%, transparent 70%)',
                 }}
                 animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.9, 1.1, 0.9] }}
                 transition={{ duration: 0.8, repeat: Infinity }}
