@@ -27,7 +27,7 @@ interface Props {
   elapsedTime: number;
   sprite?: SpriteConfig;
 
-  /** ✅ NEW: makes Rocket match bustabit viewport */
+  /** ✅ makes Rocket match bustabit viewport */
   yMax?: number;
 
   /** Optional: lets RocketScene sample the path for star-trail rendering */
@@ -40,10 +40,18 @@ interface Props {
 
 const TIME_TO_CROSS_SCENE = 10;
 const X_START = -8;
-const X_END = 92;
+
+/** ✅ FIX #1: reduce end so rocket doesn't clip right border */
+const X_END = 86;
 
 const ROTATION_DMULT = 0.05;
 const Y_TOP = 85;
+
+/**
+ * ✅ FIX #3: easy tweak without breaking math.
+ * If your rocket sprite points more “right” than “up-right”, adjust this.
+ */
+const ROCKET_ANGLE_OFFSET = 45;
 
 /* ------------------------------------------------------------------ */
 /*  Exhaust trail colors                                               */
@@ -82,9 +90,12 @@ function getX(elapsedTime: number): number {
   return Math.min(X_END, x);
 }
 
-/** ✅ Bustabit viewport Y mapping: 1..yMax => 0..Y_TOP */
+/**
+ * ✅ Bustabit viewport Y mapping: 1..yMax => 0..Y_TOP
+ * ✅ FIX #2: default yMax to 2 (NOT 250) to avoid mismatch/glitches.
+ */
 function getY(multiplier: number, yMax?: number): number {
-  const max = Math.max(2, yMax ?? 250);
+  const max = Math.max(2, yMax ?? 2);
   const m = clamp(multiplier, 1, max);
   const yNorm = Math.log(m) / Math.log(max);
   return yNorm * Y_TOP;
@@ -106,7 +117,7 @@ function getRotation(multiplier: number, elapsedTime: number, yMax?: number): nu
   const radians = Math.atan2(dy, dx);
   const degrees = radians * (180 / Math.PI);
 
-  return 45 - degrees;
+  return ROCKET_ANGLE_OFFSET - degrees;
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,6 +139,7 @@ export function Rocket({
   const isWin = state === 'WIN';
   const isCrashed = state === 'CRASHED';
 
+  /** keep your behavior: only move once flying/win */
   const active = isFlying || isWin;
 
   const { xPercent, yPercent, rotation, showExhaust, showRocket, nearTarget } =
