@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useRef, useCallback } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import type { CrashState } from '@/types';
 import { multiplierToYPosition } from '@/engine/MultiplierCurve';
 import Background from './Background';
@@ -8,10 +8,6 @@ import MultiplierScale from './MultiplierScale';
 import { Rocket } from './Rocket';
 import { CrashExplosion } from './CrashExplosion';
 import { MultiplierDisplay } from './MultiplierDisplay';
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
 
 interface RocketSceneProps {
   currentMultiplier: number;
@@ -21,10 +17,8 @@ interface RocketSceneProps {
   elapsedTime: number;
 }
 
-type TrailPoint = { x: number; y: number; t: number };
-
 /* ------------------------------------------------------------------ */
-/*  Helpers — same as before for explosion placement                   */
+/*  Helpers — mirror Rocket.tsx position logic for trail/explosion      */
 /* ------------------------------------------------------------------ */
 
 function getXFromTime(elapsedTime: number): number {
@@ -40,9 +34,7 @@ function getRocketPosition(multiplier: number, elapsedTime: number): { x: number
   return { x: xPercent, y: yPercent };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
+type TrailPoint = { x: number; y: number; t: number };
 
 export function RocketScene({
   currentMultiplier,
@@ -61,39 +53,35 @@ export function RocketScene({
       : 1;
 
   /* ------------------------------------------------------------------ */
-  /*  ✅ Trail points (STATE so it actually renders)                      */
+  /*  ✅ NEW: trail points (behind the rocket)                            */
   /* ------------------------------------------------------------------ */
 
-  const [trailPoints, setTrailPoints] = useState<TrailPoint[]>([]);
-  const lastSampleRef = useRef<number>(0);
+  const [trail, setTrail] = useState<TrailPoint[]>([]);
 
-  const TRAIL_SAMPLE_MS = 50;     // 20 samples/sec
-  const TRAIL_MAX_POINTS = 250;   // keep light
+  // Reset trail when game goes back to setup/betting
+  useEffect(() => {
+    if (state === 'IDLE' || state === 'BETTING') {
+      setTrail([]);
+    }
+  }, [state]);
 
-  const handleRocketPosition = useCallback(
-    (pos: { xPercent: number; yPercent: number; multiplier: number }) => {
-      const active = state === 'FLYING' || state === 'WIN';
-      if (!active) return;
+  // Add a point while flying/win
+  useEffect(() => {
+    const active = state === 'FLYING' || state === 'WIN';
+    if (!active) return;
 
-      const now = performance.now();
-      if (now - lastSampleRef.current < TRAIL_SAMPLE_MS) return;
-      lastSampleRef.current = now;
+    const pos = getRocketPosition(currentMultiplier, elapsedTime);
 
-      setTrailPoints((prev) => {
-        const next = [...prev, { x: pos.xPercent, y: pos.yPercent, t: now }];
-        if (next.length > TRAIL_MAX_POINTS) {
-          next.splice(0, next.length - TRAIL_MAX_POINTS);
-        }
-        return next;
-      });
-    },
-    [state]
-  );
+    setTrail((prev) => {
+      const next = [...prev, { x: pos.x, y: pos.y, t: performance.now() }];
 
-  // Clear trail when going back to setup
-  if (state === 'IDLE' || state === 'BETTING') {
-    if (trailPoints.length) setTrailPoints([]);
-  }
+      // Keep it light
+      const MAX_POINTS = 240;
+      if (next.length > MAX_POINTS) next.splice(0, next.length - MAX_POINTS);
+
+      return next;
+    });
+  }, [state, currentMultiplier, elapsedTime]);
 
   return (
     <div className="relative w-full max-w-lg aspect-[3/4] min-h-[400px] overflow-hidden rounded-2xl border border-purple-500/20">
@@ -102,7 +90,7 @@ export function RocketScene({
         <Background intensity={bgIntensity} />
       </div>
 
-      {/* Layer 2: MultiplierScale (z-10) */}
+      {/* Layer 2: MultiplierScale (z-10, right side) */}
       <div className="absolute inset-0 z-10">
         <MultiplierScale
           currentMultiplier={currentMultiplier}
@@ -111,18 +99,18 @@ export function RocketScene({
         />
       </div>
 
-      {/* ✅ Layer 2.5: Trail (z-15) */}
-      <div className="absolute inset-0 z-15 pointer-events-none">
-        {trailPoints.map((p, idx) => {
-          const t = idx / Math.max(1, trailPoints.length - 1);
+      {/* ✅ NEW Layer: Trail behind rocket (z-15) */}
+      <div className="absolute inset-0 pointer-events-none z-[15]">
+        {trail.map((p, i) => {
+          const t = i / Math.max(1, trail.length - 1);
 
-          // Make it VERY visible for now (we can refine later)
-          const opacity = 0.15 + (1 - t) * 0.55; // newer brighter
-          const size = 2 + (1 - t) * 3;          // newer bigger
+          // Make it visible (we’ll refine style later)
+          const opacity = 0.15 + (1 - t) * 0.6; // newer points brighter
+          const size = 2 + (1 - t) * 3;
 
           return (
             <div
-              key={`${p.t}-${idx}`}
+              key={`${p.t}-${i}`}
               className="absolute rounded-full"
               style={{
                 left: `${p.x}%`,
@@ -131,7 +119,7 @@ export function RocketScene({
                 height: size,
                 opacity,
                 background: 'rgba(255,255,255,1)',
-                boxShadow: `0 0 ${8 + (1 - t) * 10}px rgba(255,255,255,${opacity})`,
+                boxShadow: `0 0 ${6 + (1 - t) * 12}px rgba(255,255,255,${opacity})`,
               }}
             />
           );
@@ -145,11 +133,10 @@ export function RocketScene({
           state={state}
           targetMultiplier={targetMultiplier}
           elapsedTime={elapsedTime}
-          onPosition={handleRocketPosition}
         />
       </div>
 
-      {/* Layer 4: CrashExplosion (z-30) */}
+      {/* Layer 4: CrashExplosion (z-30, positioned at rocket's last position) */}
       <div className="absolute inset-0 z-30">
         <CrashExplosion
           state={state}
@@ -158,7 +145,7 @@ export function RocketScene({
         />
       </div>
 
-      {/* Layer 5: MultiplierDisplay (z-40) */}
+      {/* Layer 5: MultiplierDisplay (z-40, center overlay) */}
       <div className="absolute inset-0 z-40">
         <MultiplierDisplay
           currentMultiplier={currentMultiplier}
