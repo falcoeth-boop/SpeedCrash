@@ -40,9 +40,9 @@ const TIME_TO_CROSS_SCENE = 10; // seconds -> reach near right edge
 const X_START = -8;
 const X_END = 92;
 
-// You said: scale should START at 2x vertically.
-// So we clamp y mapping to 2x minimum for visuals.
-const Y_MIN_MULTIPLIER = 2;
+// ✅ IMPORTANT FIX:
+// Previously this was 2, which made Y frozen from 1.00x → 1.99x (looks horizontal).
+const Y_MIN_MULTIPLIER = 1;
 
 // Rotation derivative step (small delta multiplier)
 const ROTATION_DMULT = 0.05;
@@ -72,16 +72,19 @@ const TRAIL_COUNT = 12;
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** X maps elapsed time to horizontal progress */
+/** ✅ FIXED: X maps elapsed time to horizontal progress FROM X_START → X_END */
 function getX(elapsedTime: number): number {
   if (elapsedTime <= 0) return X_START;
-  const x = (elapsedTime / TIME_TO_CROSS_SCENE) * X_END;
+
+  const progress = elapsedTime / TIME_TO_CROSS_SCENE; // 0..1
+  const x = X_START + progress * (X_END - X_START);
+
   return Math.min(X_END, x);
 }
 
 /**
- * Y maps multiplier to vertical position using your engine curve,
- * but clamped to start at 2x (per your requested scale behavior).
+ * Y maps multiplier to vertical position using your engine curve.
+ * ✅ FIXED: don't clamp to 2x (otherwise Y is frozen early).
  */
 function getY(multiplier: number): number {
   const m = Math.max(multiplier, Y_MIN_MULTIPLIER);
@@ -90,7 +93,7 @@ function getY(multiplier: number): number {
 }
 
 /**
- * Rotation follows the actual curve tangent.
+ * Rotation follows the curve tangent.
  * We approximate derivative by sampling y at m and m+dm.
  */
 function getRotation(multiplier: number, elapsedTime: number): number {
@@ -100,8 +103,6 @@ function getRotation(multiplier: number, elapsedTime: number): number {
   const y0 = getY(m0);
   const y1 = getY(m1);
 
-  // approximate dx in % for a small time step equivalent
-  // (we treat x as time-mapped; slope is perceptual so we keep it simple)
   const x0 = getX(elapsedTime);
   const x1 = getX(elapsedTime + 0.05); // 50ms ahead
 
@@ -111,8 +112,6 @@ function getRotation(multiplier: number, elapsedTime: number): number {
   const radians = Math.atan2(dy, dx);
   const degrees = radians * (180 / Math.PI);
 
-  // 🚀 emoji points roughly 45° up-right, so subtract a bit to align
-  // Tune this if you use a real sprite that points horizontally.
   return 45 - degrees;
 }
 
