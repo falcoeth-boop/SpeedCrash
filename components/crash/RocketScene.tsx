@@ -33,7 +33,7 @@ type TrailPoint = { x: number; y: number; t: number };
 function getXFromTime(elapsedTime: number): number {
   if (elapsedTime <= 0) return -8;
   const timeScale = 10;
-  return Math.min(92, (elapsedTime / timeScale) * 92);
+  return Math.min(86, (elapsedTime / timeScale) * 86);
 }
 
 /**
