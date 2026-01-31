@@ -10,45 +10,65 @@ interface MultiplierScaleProps {
   state: CrashState;
 }
 
+const Y_MIN_MULTIPLIER = 2;
+
+// clamp helper
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+/**
+ * Remap multiplierToYPosition() so the visible scale starts at 2x (bottom).
+ * - 2x -> 0
+ * - 250x -> 1
+ */
+function toDisplayY(multiplier: number) {
+  const yMin = multiplierToYPosition(Y_MIN_MULTIPLIER);
+  const yRaw = multiplierToYPosition(Math.max(multiplier, Y_MIN_MULTIPLIER));
+  const y = (yRaw - yMin) / (1 - yMin);
+  return clamp(y, 0, 1);
+}
+
 export default function MultiplierScale({
   currentMultiplier,
   targetMultiplier,
   state,
 }: MultiplierScaleProps) {
   const isFlying = state === 'FLYING';
-  const currentY = multiplierToYPosition(currentMultiplier);
-  const targetY = multiplierToYPosition(targetMultiplier);
+
+  const currentY = toDisplayY(currentMultiplier);
+  const targetY = toDisplayY(targetMultiplier);
 
   return (
     <div className="absolute top-0 right-0 bottom-0 w-16 flex flex-col justify-between pointer-events-none select-none z-10">
-      {/* Scale labels */}
       <div className="relative h-full">
-        {CRASH_CONFIG.scaleLabels.map((label) => {
-          const yPos = multiplierToYPosition(label);
-          // yPos is 0 at bottom (1x), 1 at top (250x)
-          // CSS top: 0 = top, 100% = bottom, so we invert
-          const topPercent = (1 - yPos) * 100;
+        {/* Scale labels (>= 2x only) */}
+        {CRASH_CONFIG.scaleLabels
+          .filter((label) => label >= Y_MIN_MULTIPLIER)
+          .map((label) => {
+            const yPos = toDisplayY(label);
+            const topPercent = (1 - yPos) * 100;
 
-          return (
-            <div
-              key={label}
-              className="absolute right-2 -translate-y-1/2"
-              style={{ top: `${topPercent}%` }}
-            >
-              <span className="text-xs font-mono text-emerald-400/60">
-                {label}x
-              </span>
-            </div>
-          );
-        })}
+            return (
+              <div
+                key={label}
+                className="absolute right-2 -translate-y-1/2"
+                style={{ top: `${topPercent}%` }}
+              >
+                <span className="text-xs font-mono text-emerald-400/60">
+                  {label}x
+                </span>
+              </div>
+            );
+          })}
 
         {/* Target multiplier: dashed line across full width */}
         <div
           className="absolute right-0 -translate-y-1/2 transition-all duration-300"
           style={{
             top: `${(1 - targetY) * 100}%`,
-            left: '-100vw',
-            width: '200vw',
+            left: 0,
+            right: 0,
           }}
         >
           <div className="border-t-2 border-dashed border-amber-400/50" />
@@ -63,13 +83,12 @@ export default function MultiplierScale({
             className="absolute right-1 -translate-y-1/2 transition-all duration-75"
             style={{ top: `${(1 - currentY) * 100}%` }}
           >
-            {/* Glowing dot */}
             <div className="relative">
               <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.6)]" />
-              {/* Horizontal tick line */}
-              <div
-                className="absolute top-1/2 right-full -translate-y-1/2 h-px bg-emerald-400/40"
-                style={{ width: '100vw' }}
+
+              {/* Horizontal tick line (local to scene, not vw) */}
+              <div className="absolute top-1/2 right-full -translate-y-1/2 h-px bg-emerald-400/40"
+                   style={{ width: '100%' }}
               />
             </div>
           </div>
