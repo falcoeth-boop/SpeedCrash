@@ -39,7 +39,6 @@ export function useMultiplierAnimation({
   const [elapsedTime, setElapsedTime] = useState(0);
 
   // Store props in refs so the rAF callback always reads latest values
-  // without needing them in the effect dependency array
   const crashPointRef = useRef(crashPoint);
   const targetRef = useRef(targetMultiplier);
   const speedRef = useRef(speedMultiplier);
@@ -53,10 +52,10 @@ export function useMultiplierAnimation({
   onReachCrashRef.current = onReachCrash;
 
   // Animation internals
-  const rafRef = useRef(0);
-  const lastFrameRef = useRef(0);
-  const elapsedRef = useRef(0);
-  const resolvedRef = useRef(false);
+  const rafRef = useRef<number>(0);
+  const lastFrameRef = useRef<number>(0);
+  const elapsedRef = useRef<number>(0);
+  const resolvedRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!isFlying) {
@@ -75,6 +74,13 @@ export function useMultiplierAnimation({
     setElapsedTime(0);
     lastFrameRef.current = performance.now();
 
+    const stopLoop = () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+    };
+
     const tick = (now: number) => {
       const deltaTime = (now - lastFrameRef.current) / 1000;
       lastFrameRef.current = now;
@@ -92,7 +98,8 @@ export function useMultiplierAnimation({
           setCurrentMultiplier(Math.floor(tm * 100) / 100);
           setElapsedTime(elapsedRef.current);
           onReachTargetRef.current();
-          return; // stop loop
+          stopLoop();
+          return;
         }
 
         // Crash check: multiplier reached crash point AND it's below target
@@ -101,7 +108,8 @@ export function useMultiplierAnimation({
           setCurrentMultiplier(Math.floor(cp * 100) / 100);
           setElapsedTime(elapsedRef.current);
           onReachCrashRef.current();
-          return; // stop loop
+          stopLoop();
+          return;
         }
       }
 
@@ -113,10 +121,7 @@ export function useMultiplierAnimation({
     rafRef.current = requestAnimationFrame(tick);
 
     return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = 0;
-      }
+      stopLoop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFlying]);
