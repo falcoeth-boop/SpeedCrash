@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CrashState } from '@/types';
 import { multiplierToYPosition } from '@/engine/MultiplierCurve';
@@ -15,67 +15,37 @@ interface SpriteConfig {
   height: number;
 }
 
+type RocketPos = {
+  xPercent: number;
+  yPercent: number;
+  multiplier: number;
+};
+
 interface Props {
   currentMultiplier: number;
   state: CrashState;
   targetMultiplier: number;
   elapsedTime: number;
   sprite?: SpriteConfig;
+
+  /** Optional: lets RocketScene sample the path for star-trail rendering */
+  onPosition?: (pos: RocketPos) => void;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Position & Rotation Helpers                                        */
+/*  Tuning                                                             */
 /* ------------------------------------------------------------------ */
 
-/**
- * X position: maps elapsed time to horizontal progress.
- * ~10s to cross the full scene width.
- * Starts at -8% (off-screen left).
- */
-function getX(elapsedTime: number): number {
-  if (elapsedTime <= 0) return -8;
-  const timeScale = 10;
-  return Math.min(92, (elapsedTime / timeScale) * 92);
-}
+const TIME_TO_CROSS_SCENE = 10; // seconds -> reach near right edge
+const X_START = -8;
+const X_END = 92;
 
-/**
- * Y position: maps multiplier to vertical position.
- * 1x = 0% (very bottom), max = ~85% (top).
- * Uses the log scale from MultiplierCurve.
- */
-function getY(multiplier: number): number {
-  const yNorm = multiplierToYPosition(multiplier); // 0 at 1x, 1 at 250x
-  return yNorm * 85; // 0% at bottom, 85% at top
-}
+// You said: scale should START at 2x vertically.
+// So we clamp y mapping to 2x minimum for visuals.
+const Y_MIN_MULTIPLIER = 2;
 
-/**
- * Rotation: follows the curve tangent.
- * 
- * At 1x the curve is flat → 0° (horizontal).
- * As multiplier grows, the exponential steepens → rotation increases.
- * 
- * We compute this from the mathematical derivative rather than
- * discrete frame deltas, so it's smooth and starts at exactly 0°.
- * 
- * On the log Y scale, dy/dt is constant (the exponential becomes linear).
- * But visually we want the rocket to FEEL like it starts flat and curves up.
- * So we use the raw multiplier growth rate vs X progression rate,
- * with a perceptual mapping that starts at 0° and climbs smoothly.
- */
-function getRotation(multiplier: number): number {
-  // How far above 1x we are — at 1x this is 0, grows with flight
-  const excess = multiplier - 1;
-  
-  // atan gives 0° at excess=0, ~45° when excess=3, ~72° when excess=9
-  // The divisor (3) controls how fast it tilts — higher = gentler curve
-  const radians = Math.atan2(excess, 3);
-  const degrees = radians * (180 / Math.PI);
-  
-  // The 🚀 emoji naturally points ~45° up-right.
-  // Offset by +45° so at 0° curve angle the rocket appears horizontal.
-  // As curve steepens, subtract degrees to tilt nose upward.
-  return 45 - degrees;
-}
+// Rotation derivative step (small delta multiplier)
+const ROTATION_DMULT = 0.05;
 
 /* ------------------------------------------------------------------ */
 /*  Exhaust trail colors                                               */
@@ -99,28 +69,113 @@ const TRAIL_COLORS = [
 const TRAIL_COUNT = 12;
 
 /* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** X maps elapsed time to horizontal progress */
+function getX(elapsedTime: number): number {
+  if (elapsedTime <= 0) return X_START;
+  const x = (elapsedTime / TIME_TO_CROSS_SCENE) * X_END;
+  return Math.min(X_END, x);
+}
+
+/**
+ * Y maps multiplier to vertical position using your engine curve,
+ * but clamped to start at 2x (per your requested scale behavior).
+ */
+function getY(multiplier: number): number {
+  const m = Math.max(multiplier, Y_MIN_MULTIPLIER);
+  const yNorm = multiplierToYPosition(m); // 0 at 1x, 1 at 250x
+  return yNorm * 85; // 0% bottom, 85% top
+}
+
+/**
+ * Rotation follows the actual curve tangent.
+ * We approximate derivative by sampling y at m and m+dm.
+ */
+function getRotation(multiplier: number, elapsedTime: number): number {
+  const m0 = Math.max(multiplier, 1);
+  const m1 = m0 + ROTATION_DMULT;
+
+  const y0 = getY(m0);
+  const y1 = getY(m1);
+
+  // approximate dx in % for a small time step equivalent
+  // (we treat x as time-mapped; slope is perceptual so we keep it simple)
+  const x0 = getX(elapsedTime);
+  const x1 = getX(elapsedTime + 0.05); // 50ms ahead
+
+  const dy = y1 - y0;
+  const dx = Math.max(0.0001, x1 - x0);
+
+  const radians = Math.atan2(dy, dx);
+  const degrees = radians * (180 / Math.PI);
+
+  // 🚀 emoji points roughly 45° up-right, so subtract a bit to align
+  // Tune this if you use a real sprite that points horizontally.
+  return 45 - degrees;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export function Rocket({ currentMultiplier, state, targetMultiplier, elapsedTime, sprite }: Props) {
+export function Rocket({
+  currentMultiplier,
+  state,
+  targetMultiplier,
+  elapsedTime,
+  sprite,
+  onPosition,
+}: Props) {
   const isIdle = state === 'IDLE' || state === 'BETTING';
   const isLaunching = state === 'LAUNCHING';
   const isFlying = state === 'FLYING';
   const isWin = state === 'WIN';
   const isCrashed = state === 'CRASHED';
 
-  // Position on the curve
   const active = isFlying || isWin;
-  const xPercent = active ? getX(elapsedTime) : -8;
-  const yPercent = active ? getY(currentMultiplier) : 0;
-  const rotation = active ? getRotation(currentMultiplier) : 0;
 
-  const showExhaust = isLaunching || isFlying || isWin;
-  const showRocket = !isCrashed && !isIdle;
+  const { xPercent, yPercent, rotation, showExhaust, showRocket, nearTarget } =
+    useMemo(() => {
+      const x = active ? getX(elapsedTime) : X_START;
+      const y = active ? getY(currentMultiplier) : 0;
+      const rot = active ? getRotation(currentMultiplier, elapsedTime) : 0;
 
-  // Near target → green glow
-  const nearTarget =
-    isFlying && targetMultiplier > 1 && currentMultiplier >= targetMultiplier * 0.8;
+      const exhaust = isLaunching || isFlying || isWin;
+      const rocketVisible = !isCrashed && !isIdle;
+
+      const near =
+        isFlying &&
+        targetMultiplier > 1 &&
+        currentMultiplier >= targetMultiplier * 0.8;
+
+      return {
+        xPercent: x,
+        yPercent: y,
+        rotation: rot,
+        showExhaust: exhaust,
+        showRocket: rocketVisible,
+        nearTarget: near,
+      };
+    }, [
+      active,
+      elapsedTime,
+      currentMultiplier,
+      isLaunching,
+      isFlying,
+      isWin,
+      isCrashed,
+      isIdle,
+      targetMultiplier,
+    ]);
+
+  // Let RocketScene collect positions for star-trail rendering
+  useEffect(() => {
+    if (!onPosition) return;
+    if (!active) return;
+    onPosition({ xPercent, yPercent, multiplier: currentMultiplier });
+  }, [onPosition, active, xPercent, yPercent, currentMultiplier]);
 
   return (
     <AnimatePresence>
@@ -151,10 +206,7 @@ export function Rocket({ currentMultiplier, state, targetMultiplier, elapsedTime
           <motion.div
             animate={
               isLaunching
-                ? {
-                    x: [0, -2, 2, -3, 3, -1, 1, 0],
-                    y: [0, 1, -1, 2, -2, 1, 0],
-                  }
+                ? { x: [0, -2, 2, -3, 3, -1, 1, 0], y: [0, 1, -1, 2, -2, 1, 0] }
                 : { x: 0, y: 0 }
             }
             transition={
@@ -168,7 +220,8 @@ export function Rocket({ currentMultiplier, state, targetMultiplier, elapsedTime
               <motion.div
                 className="absolute -inset-4 rounded-full"
                 style={{
-                  background: 'radial-gradient(circle, rgba(34,197,94,0.5) 0%, transparent 70%)',
+                  background:
+                    'radial-gradient(circle, rgba(34,197,94,0.5) 0%, transparent 70%)',
                 }}
                 animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.9, 1.1, 0.9] }}
                 transition={{ duration: 0.8, repeat: Infinity }}
@@ -205,7 +258,8 @@ export function Rocket({ currentMultiplier, state, targetMultiplier, elapsedTime
                   const t = i / TRAIL_COUNT;
                   const size = 14 - i * 1;
                   const opacity = 1 - t * 0.8;
-                  const color = TRAIL_COLORS[i] ?? TRAIL_COLORS[TRAIL_COLORS.length - 1];
+                  const color =
+                    TRAIL_COLORS[i] ?? TRAIL_COLORS[TRAIL_COLORS.length - 1];
 
                   return (
                     <motion.div
@@ -214,7 +268,6 @@ export function Rocket({ currentMultiplier, state, targetMultiplier, elapsedTime
                       style={{
                         width: size,
                         height: size,
-                        // Trail goes behind the rocket (leftward)
                         left: 24 - 8 - i * 5,
                         top: 24 + i * 2,
                         background: `radial-gradient(circle, ${color}, transparent)`,
