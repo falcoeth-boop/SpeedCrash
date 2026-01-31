@@ -1,16 +1,12 @@
 'use client';
 
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState, useRef } from 'react';
 import type { CrashState } from '@/types';
 import Background from './Background';
 import MultiplierScale from './MultiplierScale';
 import { Rocket } from './Rocket';
 import { CrashExplosion } from './CrashExplosion';
 import { MultiplierDisplay } from './MultiplierDisplay';
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
 
 interface RocketSceneProps {
   currentMultiplier: number;
@@ -20,26 +16,17 @@ interface RocketSceneProps {
   elapsedTime: number;
 }
 
-type TrailPoint = { x: number; y: number; t: number };
+/** store WORLD points (time, multiplier). We convert to screen each render */
+type WorldPoint = { t: number; m: number };
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
+const VIEW_SECONDS = 10;
+const X_START = -8;
+const X_PIN = 86;
 
-/**
- * X position: seconds-based.
- * ~10s to cross the full scene width.
- */
-function getXFromTime(elapsedTime: number): number {
-  if (elapsedTime <= 0) return -8;
-  const timeScale = 10;
-  return Math.min(86, (elapsedTime / timeScale) * 86);
-}
+const Y_TOP = 85;
+const Y_PIN = 68; // where the rocket stays pinned vertically after 10s (tweak 62-72)
 
-/**
- * Bustabit-like "viewport" max for Y axis.
- * Keeps movement visible by expanding range only when needed.
- */
+/** bustabit step ladder */
 function getTargetYMax(multiplier: number): number {
   if (multiplier < 2) return 2;
   if (multiplier < 5) return 5;
@@ -50,33 +37,24 @@ function getTargetYMax(multiplier: number): number {
   return 250;
 }
 
-/**
- * Shared Y mapping for Rocket + Trail + Scale.
- * Uses log mapping from 1..yMax => 0..(Y_TOP)%.
- */
-function multiplierToViewportYPercent(multiplier: number, yMax: number): number {
-  const Y_TOP = 85; // keep headroom like your original
-  const m = Math.max(1, Math.min(multiplier, yMax));
-  if (yMax <= 1) return 0;
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v));
+}
 
-  // log curve: 1 => 0, yMax => 1
-  const yNorm = Math.log(m) / Math.log(yMax);
+/** base log mapping 1..yMax -> 0..Y_TOP */
+function baseYPercent(multiplier: number, yMax: number): number {
+  const max = Math.max(2, yMax);
+  const m = clamp(multiplier, 1, max);
+  const yNorm = Math.log(m) / Math.log(max); // 1=>0, yMax=>1
   return yNorm * Y_TOP;
 }
 
-function getRocketPosition(
-  multiplier: number,
-  elapsedTime: number,
-  yMax: number
-): { x: number; y: number } {
-  const xPercent = getXFromTime(elapsedTime);
-  const yPercent = multiplierToViewportYPercent(multiplier, yMax);
-  return { x: xPercent, y: yPercent };
+/** camera X mapping: world time -> screen percent */
+function xFromTime(t: number, xMin: number, xMax: number): number {
+  const span = Math.max(0.0001, xMax - xMin);
+  const p = clamp((t - xMin) / span, 0, 1); // 0..1
+  return X_START + p * (X_PIN - X_START);
 }
-
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
 
 export function RocketScene({
   currentMultiplier,
@@ -85,144 +63,177 @@ export function RocketScene({
   state,
   elapsedTime,
 }: RocketSceneProps) {
-  /* ------------------------------------------------------------------ */
-  /*  ✅ Bustabit-like dynamic Y-axis viewport (smoothed)                 */
-  /* ------------------------------------------------------------------ */
+  const isSetup = state === 'IDLE' || state === 'BETTING';
+  const isActive = state === 'LAUNCHING' || state === 'FLYING' || state === 'WIN';
 
+  /** ---------------------------
+   *  CAMERA: yMax (step + smooth)
+   * --------------------------- */
   const [yMax, setYMax] = useState<number>(2);
 
   useEffect(() => {
-    // Reset when returning to setup
-    if (state === 'IDLE' || state === 'BETTING') {
+    if (isSetup) {
       setYMax(2);
       return;
     }
-
-    // Expand range gradually (smooth zoom-out feeling)
     const desired = getTargetYMax(currentMultiplier);
+
     setYMax((prev) => {
-      // Only grow, don’t shrink mid-round (prevents jitter)
-      const next = Math.max(prev, desired);
-
-      // small smoothing step so it doesn't "jump"
-      const lerp = 0.15;
-      return prev + (next - prev) * lerp;
+      // step up immediately when needed, then smooth a bit
+      const stepUp = Math.max(prev, desired);
+      const lerp = 0.18;
+      return prev + (stepUp - prev) * lerp;
     });
-  }, [state, currentMultiplier]);
+  }, [isSetup, currentMultiplier]);
 
-  /* ------------------------------------------------------------------ */
-  /*  Explosion position uses the SAME mapping (fixes mismatch)          */
-  /* ------------------------------------------------------------------ */
+  /** ---------------------------
+   *  CAMERA: x window (bustabit)
+   *  0..10s fixed, then slides
+   * --------------------------- */
+  const xMin = elapsedTime <= VIEW_SECONDS ? 0 : elapsedTime - VIEW_SECONDS;
+  const xMax = elapsedTime <= VIEW_SECONDS ? VIEW_SECONDS : elapsedTime;
 
-  const explosionPosition = useMemo(() => {
-    return getRocketPosition(currentMultiplier, elapsedTime, yMax);
-  }, [currentMultiplier, elapsedTime, yMax]);
+  /** ---------------------------
+   *  PIN MODE after 10s
+   *  Rocket stays fixed at (X_PIN, Y_PIN)
+   *  We achieve this by applying a yOffset to the curve/rocket.
+   * --------------------------- */
+  const pinned = elapsedTime >= VIEW_SECONDS && isActive;
 
-  /* ------------------------------------------------------------------ */
-  /*  Background intensity                                               */
-  /* ------------------------------------------------------------------ */
+  // compute vertical offset so CURRENT point is at Y_PIN
+  const yOffset = useMemo(() => {
+    if (!pinned) return 0;
+    const yNow = baseYPercent(currentMultiplier, yMax);
+    return Y_PIN - yNow;
+  }, [pinned, currentMultiplier, yMax]);
 
-  const bgIntensity = state === 'FLYING' ? 1 : 1;
-
-  /* ------------------------------------------------------------------ */
-  /*  ✅ Route / trail tracking                                          */
-  /* ------------------------------------------------------------------ */
-
-  const [trail, setTrail] = useState<TrailPoint[]>([]);
+  /** ---------------------------
+   *  WORLD trail
+   * --------------------------- */
+  const [worldTrail, setWorldTrail] = useState<WorldPoint[]>([]);
+  const lastSampleRef = useRef<{ t: number; m: number } | null>(null);
 
   useEffect(() => {
-    if (state === 'IDLE' || state === 'BETTING') setTrail([]);
-  }, [state]);
+    if (isSetup) {
+      setWorldTrail([]);
+      lastSampleRef.current = null;
+    }
+  }, [isSetup]);
 
   useEffect(() => {
-    const active = state === 'LAUNCHING' || state === 'FLYING' || state === 'WIN';
-    if (!active) return;
+    if (!isActive) return;
 
-    const pos = getRocketPosition(currentMultiplier, elapsedTime, yMax);
+    const last = lastSampleRef.current;
+    const t = elapsedTime;
+    const m = currentMultiplier;
 
-    setTrail((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && Math.abs(last.x - pos.x) < 0.15 && Math.abs(last.y - pos.y) < 0.15) {
-        return prev;
-      }
+    // sample guard (keeps it smooth & light)
+    if (last && Math.abs(last.t - t) < 0.04 && Math.abs(last.m - m) < 0.01) return;
 
-      const next = [...prev, { x: pos.x, y: pos.y, t: performance.now() }];
+    lastSampleRef.current = { t, m };
 
-      const MAX_POINTS = 600;
-      if (next.length > MAX_POINTS) next.splice(0, next.length - MAX_POINTS);
+    setWorldTrail((prev) => {
+      const next = [...prev, { t, m }];
+
+      // keep only points in a bit wider than view window (so line doesn't pop)
+      const keepFrom = xMin - 2;
+      while (next.length > 0 && next[0].t < keepFrom) next.shift();
+
+      // hard cap
+      const MAX = 1200;
+      if (next.length > MAX) next.splice(0, next.length - MAX);
 
       return next;
     });
-  }, [state, currentMultiplier, elapsedTime, yMax]);
+  }, [isActive, elapsedTime, currentMultiplier, xMin]);
+
+  /** ---------------------------
+   *  SCREEN trail points
+   * --------------------------- */
+  const screenTrail = useMemo(() => {
+    return worldTrail.map((p) => {
+      const x = xFromTime(p.t, xMin, xMax);
+      const y = baseYPercent(p.m, yMax) + yOffset;
+      return { x, y: clamp(y, 0, 98) };
+    });
+  }, [worldTrail, xMin, xMax, yMax, yOffset]);
+
+  /** ---------------------------
+   *  Rocket position (same mapping!)
+   * --------------------------- */
+  const rocketPos = useMemo(() => {
+    const x = pinned ? X_PIN : xFromTime(elapsedTime, xMin, xMax);
+    const y = baseYPercent(currentMultiplier, yMax) + yOffset;
+    return { xPercent: x, yPercent: clamp(y, 0, 98) };
+  }, [pinned, elapsedTime, xMin, xMax, currentMultiplier, yMax, yOffset]);
+
+  /** Explosion uses same position as rocket */
+  const explosionPosition = useMemo(() => {
+    return { x: rocketPos.xPercent, y: rocketPos.yPercent };
+  }, [rocketPos]);
+
+  const bgIntensity = 1;
 
   return (
     <div className="relative w-full max-w-lg aspect-[3/4] min-h-[400px] overflow-hidden rounded-2xl border border-purple-500/20">
-      {/* Layer 1: Background (z-0) */}
+      {/* Background */}
       <div className="absolute inset-0 z-0">
         <Background intensity={bgIntensity} />
       </div>
 
-      {/* Layer 2: MultiplierScale (z-10) */}
+      {/* Scale */}
       <div className="absolute inset-0 z-10">
         <MultiplierScale
           currentMultiplier={currentMultiplier}
           targetMultiplier={targetMultiplier}
           state={state}
-          yMax={yMax} // ✅ new
+          yMax={yMax}
+          pinned={pinned}
+          pinnedYPercent={Y_PIN}
         />
       </div>
 
-      {/* ✅ Layer: Route/Graph behind rocket (z-19) */}
+      {/* Graph / trail */}
       <div className="absolute inset-0 pointer-events-none z-[19]">
         <svg viewBox="-8 0 108 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
-          {/* Glow underlay */}
           <polyline
             fill="none"
             stroke="rgba(255,255,255,0.18)"
             strokeWidth="2.2"
             strokeLinejoin="round"
             strokeLinecap="round"
-            points={trail.map((p) => `${p.x},${100 - p.y}`).join(' ')}
+            points={screenTrail.map((p) => `${p.x},${100 - p.y}`).join(' ')}
           />
-          {/* Main line */}
           <polyline
             fill="none"
             stroke="rgba(255,255,255,0.85)"
             strokeWidth="0.9"
             strokeLinejoin="round"
             strokeLinecap="round"
-            points={trail.map((p) => `${p.x},${100 - p.y}`).join(' ')}
+            points={screenTrail.map((p) => `${p.x},${100 - p.y}`).join(' ')}
           />
-
-          {/* Debug marker (keep it until you confirm) */}
-          {trail.length > 0 && (
-            <circle
-              cx={trail[trail.length - 1].x}
-              cy={100 - trail[trail.length - 1].y}
-              r="1.4"
-              fill="rgba(0,255,255,1)"
-            />
-          )}
         </svg>
       </div>
 
-      {/* Layer 3: Rocket (z-20) */}
+      {/* Rocket */}
       <div className="absolute inset-0 z-20">
         <Rocket
           currentMultiplier={currentMultiplier}
           state={state}
           targetMultiplier={targetMultiplier}
           elapsedTime={elapsedTime}
-          yMax={yMax} // ✅ new
+          yMax={yMax}
+          positionOverride={rocketPos}
+          pinned={pinned}
         />
       </div>
 
-      {/* Layer 4: CrashExplosion (z-30) */}
+      {/* Explosion */}
       <div className="absolute inset-0 z-30">
         <CrashExplosion state={state} position={explosionPosition} crashPoint={crashPoint ?? undefined} />
       </div>
 
-      {/* Layer 5: MultiplierDisplay (z-40) */}
+      {/* Center display */}
       <div className="absolute inset-0 z-40">
         <MultiplierDisplay
           currentMultiplier={currentMultiplier}
